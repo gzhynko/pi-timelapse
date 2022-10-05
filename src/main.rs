@@ -39,14 +39,14 @@ fn main() {
 
         if curr_time.day() != last_daily_video.day() {
             let filename = format!("daily-{}.mp4", yesterday.format("%Y-%m-%d").to_string());
-            compile_vid(&filename, DAILY_TIMELAPSE_SHOTS_DIR, DAILY_TIMELAPSE_VIDS_DIR);
+            compile_vid(&filename, DAILY_TIMELAPSE_SHOTS_DIR, DAILY_TIMELAPSE_VIDS_DIR, 25);
             clean_up_dir(DAILY_TIMELAPSE_SHOTS_DIR);
             last_daily_video = curr_time;
         }
 
         if curr_time.month() != last_longterm_video.month() {
             let filename = format!("longterm-{}.mp4", yesterday.format("%Y-%m").to_string());
-            compile_vid(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR, LONG_TERM_TIMELAPSE_VIDS_DIR);
+            compile_vid(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR, LONG_TERM_TIMELAPSE_VIDS_DIR, 15);
             clean_up_dir(LONG_TERM_TIMELAPSE_SHOTS_DIR);
             last_longterm_video = curr_time;
         }
@@ -82,57 +82,17 @@ fn capture(filename: &str, output_dir: &str) {
     }
 }
 
-fn compile_vid(filename: &str, source_dir: &str, output_dir: &str) {
-    println!("compile vid: {}; {}; {}", filename, source_dir, output_dir);
-    let mut images = Vec::new();
+fn compile_vid(filename: &str, source_dir: &str, output_dir: &str, fps: i32) {
+    info!("compile vid: filename: {}; srcdir: {}; outputdir: {}; fps: {}", filename, source_dir, output_dir, fps);
 
-    let dir = Path::read_dir(source_dir.as_ref()).unwrap();
-    for file in dir {
-        let file_path = file.unwrap().path();
-        images.push(file_path.clone().into_os_string());
-    }
+    let result = Command::new("video-fromimg")
+        .args(["--input-files", &format!("{}/*.jpg", source_dir), "--fps", &fps.to_string(), Path::join(output_dir.as_ref(), filename).to_str().unwrap()])
+        .output();
 
-    images.sort();
-
-    if images.is_empty() {
-        return;
-    }
-
-    let files_to_compile = Command::new("cat")
-        .args(images)
-        .output()
-        .unwrap();
-
-    // Spawn the `ffmpeg` command
-    let process = match Command::new("ffmpeg")
-        .args([ "-framerate", "25", "-i", "-", Path::join(output_dir.as_ref(), filename).to_str().unwrap() ])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn() {
-        Err(why) => panic!("couldn't spawn ffmpeg: {}", why),
-        Ok(process) => process,
-    };
-
-    // Write a string to the `stdin` of `ffmpeg`.
-    //
-    // `stdin` has type `Option<ChildStdin>`, but since we know this instance
-    // must have one, we can directly `unwrap` it.
-    match process.stdin.unwrap().write_all(&files_to_compile.stdout) {
-        Err(why) => panic!("couldn't write to ffmpeg stdin: {}", why),
-        Ok(_) => (),
-    }
-
-    // Because `stdin` does not live after the above calls, it is `drop`ed,
-    // and the pipe is closed.
-    //
-    // This is very important, otherwise `ffmpeg` wouldn't start processing the
-    // input we just sent.
-
-    // The `stdout` field also has type `Option<ChildStdout>` so must be unwrapped.
-    let mut s = String::new();
-    match process.stdout.unwrap().read_to_string(&mut s) {
-        Err(why) => panic!("couldn't read ffmpeg stdout: {}", why),
-        Ok(_) => (),
+    if result.is_err() {
+        error!("failed to compile");
+    } else {
+        info!("compiled successfully");
     }
 }
 
