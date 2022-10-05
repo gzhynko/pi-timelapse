@@ -7,6 +7,7 @@ use chrono::prelude::*;
 use std::process::{Command, Stdio};
 use chrono::Duration;
 use log::{error, info};
+use serde::{Deserialize, Serialize};
 
 const DAILY_TIMELAPSE_SHOT_INTERVAL: u32 = 2; // shoot daily every 2 minutes
 const LONG_TERM_TIMELAPSE_SHOT_HOUR: u32 = 12; // shoot longterm at noon
@@ -16,6 +17,27 @@ const LONG_TERM_TIMELAPSE_SHOTS_DIR: &str = "/home/pi/Timelapse/LongTerm/TempPho
 const DAILY_TIMELAPSE_VIDS_DIR: &str = "/home/pi/Timelapse/Daily/Videos";
 const LONG_TERM_TIMELAPSE_VIDS_DIR: &str = "/home/pi/Timelapse/LongTerm/Videos";
 
+const STATE_FILE_PATH: &str = "/home/pi/Timelapse/state.json";
+
+#[derive(Serialize, Deserialize)]
+struct State {
+    last_daily_capture: DateTime<Local>,
+    last_longterm_capture: DateTime<Local>,
+    last_daily_video: DateTime<Local>,
+    last_longterm_video: DateTime<Local>,
+}
+
+impl Default for State {
+    fn default() -> Self {
+        Self {
+            last_daily_capture: Local::now(),
+            last_longterm_capture: Local::now(),
+            last_daily_video: Local::now(),
+            last_longterm_video: Local::now(),
+        }
+    }
+}
+
 fn main() {
     setup_logger().unwrap();
 
@@ -24,10 +46,7 @@ fn main() {
     fs::create_dir_all(DAILY_TIMELAPSE_VIDS_DIR).unwrap();
     fs::create_dir_all(LONG_TERM_TIMELAPSE_VIDS_DIR).unwrap();
 
-    let mut last_daily_capture = Local::now();
-    let mut last_longterm_capture = Local::now();
-    let mut last_daily_video = Local::now();
-    let mut last_longterm_video = Local::now();
+    let mut curr_state = load_curr_state();
 
     loop {
         let curr_time = Local::now();
@@ -37,38 +56,55 @@ fn main() {
         // used for file names
         let yesterday = curr_time - Duration::days(1);
 
-        if curr_time.day() != last_daily_video.day() {
+        if curr_time.day() != curr_state.last_daily_video.day() {
             let filename = format!("daily-{}.mp4", yesterday.format("%Y-%m-%d").to_string());
             compile_vid(&filename, DAILY_TIMELAPSE_SHOTS_DIR, DAILY_TIMELAPSE_VIDS_DIR, 25);
             clean_up_dir(DAILY_TIMELAPSE_SHOTS_DIR);
-            last_daily_video = curr_time;
+            curr_state.last_daily_video = curr_time;
         }
 
-        if curr_time.month() != last_longterm_video.month() {
+        if curr_time.month() != curr_state.last_longterm_video.month() {
             let filename = format!("longterm-{}.mp4", yesterday.format("%Y-%m").to_string());
             compile_vid(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR, LONG_TERM_TIMELAPSE_VIDS_DIR, 15);
             clean_up_dir(LONG_TERM_TIMELAPSE_SHOTS_DIR);
-            last_longterm_video = curr_time;
+            curr_state.last_longterm_video = curr_time;
         }
 
         // Capture shots
 
-        if curr_time.minute() % DAILY_TIMELAPSE_SHOT_INTERVAL == 0 && last_daily_capture.minute() != curr_time.minute() {
+        if curr_time.minute() % DAILY_TIMELAPSE_SHOT_INTERVAL == 0 && curr_state.last_daily_capture.minute() != curr_time.minute() {
             let filename = format!("daily-{}.jpg", curr_time.format("%Y-%m-%d_%H%M").to_string());
             capture(&filename, DAILY_TIMELAPSE_SHOTS_DIR);
-            last_daily_capture = curr_time;
+            curr_state.last_daily_capture = curr_time;
         }
 
-        if curr_time.hour() == LONG_TERM_TIMELAPSE_SHOT_HOUR && curr_time.day() != last_longterm_capture.day() {
+        if curr_time.hour() == LONG_TERM_TIMELAPSE_SHOT_HOUR && curr_time.day() != curr_state.last_longterm_capture.day() {
             let filename = format!("longterm-{}.jpg", curr_time.format("%Y-%m-%d").to_string());
             capture(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR);
-            last_longterm_capture = curr_time;
+            curr_state.last_longterm_capture = curr_time;
         }
+
+        save_curr_state(&curr_state);
 
         // Sleep for 1 min
 
         sleep(std::time::Duration::from_secs(60));
     }
+}
+
+fn load_curr_state() -> State {
+    let file = fs::read_to_string(STATE_FILE_PATH);
+    if file.is_err() {
+        State::default()
+    } else {
+        let contents = file.unwrap();
+        serde_json::from_str(&contents).unwrap()
+    }
+}
+
+fn save_curr_state(state: &State) {
+    let serialized = serde_json::to_string(state).unwrap();
+    fs::write(STATE_FILE_PATH, serialized).unwrap();
 }
 
 fn capture(filename: &str, output_dir: &str) {
