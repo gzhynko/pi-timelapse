@@ -10,7 +10,7 @@ use std::process::{Command};
 use chrono::Duration;
 use log::{error, info, warn};
 use serde::{Deserialize, Serialize};
-use ssh2::Session;
+use ssh2::{Session};
 
 const DAILY_TIMELAPSE_SHOT_INTERVAL_MINUTES: u32 = 2; // shoot daily every 2 minutes
 const LONG_TERM_TIMELAPSE_SHOT_HOUR: u32 = 12; // shoot longterm at noon
@@ -75,16 +75,18 @@ fn main() {
         let yesterday = curr_time - Duration::days(1);
 
         if curr_time.day() != curr_state.last_daily_video.day() {
-            let filename = format!("daily-{}.mp4", yesterday.format("%Y-%m-%d").to_string());
-            compile_vid(&filename, DAILY_TIMELAPSE_SHOTS_DIR, DAILY_TIMELAPSE_VIDS_DIR, 25);
+            let filename = format!("daily-{}.mkv", yesterday.format("%Y-%m-%d").to_string());
+            // This is not the perfect way to handle errors in the video compilation process,
+            // but this is better than just deleting all captured shots if something goes wrong.
+            compile_vid(&filename, DAILY_TIMELAPSE_SHOTS_DIR, DAILY_TIMELAPSE_VIDS_DIR, 25).unwrap();
             clean_up_dir(DAILY_TIMELAPSE_SHOTS_DIR);
             curr_state.last_daily_video = curr_time;
             curr_state.daily_vids_to_upload.push_back(filename);
         }
 
         if curr_time.month() != curr_state.last_longterm_video.month() {
-            let filename = format!("longterm-{}.mp4", yesterday.format("%Y-%m").to_string());
-            compile_vid(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR, LONG_TERM_TIMELAPSE_VIDS_DIR, 15);
+            let filename = format!("longterm-{}.mkv", yesterday.format("%Y-%m").to_string());
+            compile_vid(&filename, LONG_TERM_TIMELAPSE_SHOTS_DIR, LONG_TERM_TIMELAPSE_VIDS_DIR, 15).unwrap();
             clean_up_dir(LONG_TERM_TIMELAPSE_SHOTS_DIR);
             curr_state.last_longterm_video = curr_time;
             curr_state.longterm_vids_to_upload.push_back(filename);
@@ -263,18 +265,15 @@ fn capture(filename: &str, output_dir: &str) {
     }
 }
 
-fn compile_vid(filename: &str, source_dir: &str, output_dir: &str, fps: i32) {
-    info!("Compiling video with video-fromimg: filename: {}; srcdir: {}; outputdir: {}; fps: {}.", filename, source_dir, output_dir, fps);
+fn compile_vid(filename: &str, source_dir: &str, output_dir: &str, fps: u32) -> Result<(), std::io::Error> {
+    info!("Compiling video with img2vid: filename: {}; srcdir: {}; outputdir: {}; fps: {}.", filename, source_dir, output_dir, fps);
+    let now = std::time::Instant::now();
 
-    let result = Command::new("video-fromimg")
-        .args(["--input-files", &format!("{}/*.jpg", source_dir), "--fps", &fps.to_string(), Path::join(output_dir.as_ref(), filename).to_str().unwrap()])
-        .output();
+    let video_buffer = img2vid::images_to_video(&format!("{}/*.jpg", source_dir), "h264", "matroska", fps);
+    fs::write(Path::new(output_dir).join(Path::new(filename)), video_buffer).unwrap();
 
-    if result.is_err() {
-        error!("Failed to compile.");
-    } else {
-        info!("Compiled successfully.");
-    }
+    info!("Compiled successfully. Took {}s.", now.elapsed().as_secs());
+    Ok(())
 }
 
 fn clean_up_dir(dir: &str) {
